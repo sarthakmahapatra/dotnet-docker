@@ -1,0 +1,197 @@
+trigger:
+  branches:
+    include:
+      - nightly
+    exclude:
+      - samples/*
+
+phases:
+- phase: Linux_amd64
+  queue:
+    name: DotNet-Build
+    demands:
+      - agent.os -equals linux
+    parallel: 3
+    matrix:
+      Build_1_*:
+        dotnet.version: 1.\*
+      Build_2_0:
+        dotnet.version: 2.0\*
+      Build_2_1:
+        dotnet.version: 2.1\*
+  variables:
+    imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-debian-20180330181728
+  steps:
+  - script: docker system prune -a -f
+    displayName: Cleanup Docker
+    continueOnError: true
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
+  - script: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(Build.SourcesDirectory):/repo -w /repo --name image_builder_$(Build.BuildId) $(imageBuilder.imageName) build --path $(dotnet.version) --var VersionFilter=$(dotnet.version) --var ArchitectureFilter=amd64 --push --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
+    displayName: Build Images
+  - script: docker system prune -a -f
+    displayName: Cleanup Docker
+    condition: always()
+    continueOnError: true
+
+- phase: Linux_arm32v7
+  queue:
+    name: DotNetCore-Infra
+    demands:
+      - VSTS_OS -equals Windows_10_Enterprise
+      - DockerVersion
+    parallel: 2
+    matrix:
+      Build_2_0:
+        dotnet.version: 2.0*
+      Build_2_1:
+        dotnet.version: 2.1*
+  variables:
+    docker.baseArtifactName: $(Build.BuildId)
+    docker.certVolumeArg: -v cert_$(docker.baseArtifactName):/docker-certs
+    docker.commonRunArgs: --rm -v $(docker.repoVolumeName):/repo -w /repo $(docker.certVolumeArg) -e DOCKER_CERT_PATH=/docker-certs -e DOCKER_TLS_VERIFY=1 -e DOCKER_HOST=tcp://$(PiIp):2376
+    docker.gitEnabledImageName: buildpack-deps:stretch-scm
+    docker.repoVolumeName: repo_$(docker.baseArtifactName)
+    docker.setupContainerName: setup_$(docker.baseArtifactName)
+    imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-debian-20180330181728
+  steps:
+  - powershell: |
+      docker ps -a -q | %{docker rm -f $_}
+      docker images | where {-Not ($_.StartsWith("microsoft/nanoserver ") -Or $_.StartsWith("microsoft/windowsservercore ") -Or $_.StartsWith("REPOSITORY "))} | %{$_.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)[2]} | select-object -unique | %{docker rmi -f $_}
+    displayName: Cleanup Docker
+    continueOnError: true
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
+  - script: docker create $(docker.certVolumeArg) --name $(docker.setupContainerName) $(imageBuilder.imageName)
+    displayName: Create Setup Container
+  - script: docker cp c:/docker-certs $(docker.setupContainerName):/
+    displayName: Copy Docker Certs
+  - script: docker rm -f $(docker.setupContainerName)
+    displayName: Cleanup container
+    continueOnError: true
+  - script: docker run $(docker.commonRunArgs) --name clone_$(docker.baseArtifactName) $(docker.gitEnabledImageName) git clone https://github.com/dotnet/dotnet-docker.git /repo
+    displayName: Clone Repo
+  - script: docker run $(docker.commonRunArgs) --name checkout_$(docker.baseArtifactName) $(docker.gitEnabledImageName) git checkout $(Build.SourceVersion)
+    displayName: Checkout Source
+  - script: docker run $(docker.commonRunArgs) --name image_builder_$(docker.baseArtifactName) $(imageBuilder.imageName) build --path $(dotnet.version) --architecture arm --var VersionFilter=$(dotnet.version) --var ArchitectureFilter=arm --push --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
+    displayName: Build Images
+  - script: docker run $(docker.commonRunArgs) --name cleanup_$(docker.baseArtifactName) --entrypoint docker $(imageBuilder.imageName) system prune -a -f
+    displayName: Cleanup ARM Docker
+    condition: always()
+    continueOnError: true
+  - powershell: |
+      docker ps -a -q | %{docker rm -f $_}
+      docker images | where {-Not ($_.StartsWith("microsoft/nanoserver ") -Or $_.StartsWith("microsoft/windowsservercore ") -Or $_.StartsWith("REPOSITORY "))} | %{$_.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)[2]} | select-object -unique | %{docker rmi -f $_}
+    displayName: Cleanup Docker
+    condition: always()
+    continueOnError: true
+
+- phase: WindowsServer2016_amd64
+  queue:
+    name: DotNetCore-Build
+    demands:
+      - agent.os -equals Windows_NT
+    parallel: 3
+    matrix:
+      Build_1_*:
+        dotnet.version: 1.*
+      Build_2_0:
+        dotnet.version: 2.0*
+      Build_2_1:
+        dotnet.version: 2.1*
+  variables:
+    docker.baseArtifactName: $(Build.BuildId)
+    docker.setupContainerName: setup_$(docker.baseArtifactName)
+    imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-nanoserver-20180227141513
+  steps:
+  - powershell: |
+      docker ps -a -q | %{docker rm -f $_}
+      docker images | where {-Not ($_.StartsWith("microsoft/nanoserver ") -Or $_.StartsWith("microsoft/windowsservercore ") -Or $_.StartsWith("REPOSITORY "))} | %{$_.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)[2]} | select-object -unique | %{docker rmi -f $_}
+    displayName: Cleanup Docker
+    continueOnError: true
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
+  - script: docker create --name $(docker.setupContainerName) $(imageBuilder.imageName)
+    displayName: Create Setup Container
+  - script: docker cp $(docker.setupContainerName):/image-builder $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder
+    displayName: Copy Image Builder
+  - script: docker rm -f $(docker.setupContainerName)
+    displayName: Cleanup Setup Container
+    continueOnError: true
+  - script: $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder/Microsoft.DotNet.ImageBuilder.exe build --path $(dotnet.version)/nanoserver-sac2016/* --var ArchitectureFilter=amd64 --var VersionFilter=$(dotnet.version) --var OSFilter=nanoserver-sac2016 --push --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
+    displayName: Build Images
+  - powershell: |
+      docker ps -a -q | %{docker rm -f $_}
+      docker images | where {-Not ($_.StartsWith("microsoft/nanoserver ") -Or $_.StartsWith("microsoft/windowsservercore ") -Or $_.StartsWith("REPOSITORY "))} | %{$_.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)[2]} | select-object -unique | %{docker rmi -f $_}
+    displayName: Cleanup Docker
+    condition: always()
+    continueOnError: true
+
+- phase: WindowsServer1709_amd64
+  queue:
+    name: DotNetCore-Infra
+    demands:
+      - VSTS_OS -equals Windows_Server_2016_Data_Center_RS3
+    parallel: 2
+    matrix:
+      Build_2_0:
+        dotnet.version: 2.0*
+      Build_2_1:
+        dotnet.version: 2.1*
+  variables:
+    docker.baseArtifactName: $(Build.BuildId)
+    docker.setupContainerName: setup_$(docker.baseArtifactName)
+    imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-nanoserver-20180227141513
+  steps:
+  - powershell: |
+      docker ps -a -q | %{docker rm -f $_}
+      docker images | where {-Not ($_.StartsWith("microsoft/nanoserver ") -Or $_.StartsWith("microsoft/windowsservercore ") -Or $_.StartsWith("REPOSITORY "))} | %{$_.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)[2]} | select-object -unique | %{docker rmi -f $_}
+    displayName: Cleanup Docker
+    continueOnError: true
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
+  - script: docker create --name $(docker.setupContainerName) $(imageBuilder.imageName)
+    displayName: Create Setup Container
+  - script: docker cp $(docker.setupContainerName):/image-builder $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder
+    displayName: Copy Image Builder
+  - script: docker rm -f $(docker.setupContainerName)
+    displayName: Cleanup Setup Container
+    continueOnError: true
+  - script: $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder/Microsoft.DotNet.ImageBuilder.exe build --path $(dotnet.version)/nanoserver-1709/* --var ArchitectureFilter=amd64 --var VersionFilter=$(dotnet.version) --var OSFilter=nanoserver-1709 --push --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
+    displayName: Build Images
+  - powershell: |
+      docker ps -a -q | %{docker rm -f $_}
+      docker images | where {-Not ($_.StartsWith("microsoft/nanoserver ") -Or $_.StartsWith("microsoft/windowsservercore ") -Or $_.StartsWith("REPOSITORY "))} | %{$_.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)[2]} | select-object -unique | %{docker rmi -f $_}
+    displayName: Cleanup Docker
+    condition: always()
+    continueOnError: true
+
+- phase: PostBuild
+  dependsOn:
+  - Linux_amd64
+  - Linux_arm32v7
+  - WindowsServer2016_amd64
+  - WindowsServer1709_amd64
+  queue:
+    name: DotNet-Build
+    demands:
+      - agent.os -equals linux
+  variables:
+    docker.baseArtifactName: $(Build.BuildId)
+    docker.commonRunArgs: --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(Build.SourcesDirectory):/repo -w /repo $(imageBuilder.imageName)
+    imageBuilder.commonCmdArgs: --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
+    imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-debian-20180330181728
+  steps:
+  - script: docker system prune -a -f
+    displayName: Cleanup Docker
+    continueOnError: true
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
+  - script: docker run --name publish_$(docker.baseArtifactName) $(docker.commonRunArgs) publishManifest $(imageBuilder.commonCmdArgs)
+    displayName: Publish Manifest
+  - script: docker run --name readme_$(docker.baseArtifactName) $(docker.commonRunArgs) updateReadme $(imageBuilder.commonCmdArgs)
+    displayName: Update Readme
+  - script: docker system prune -a -f
+    displayName: Cleanup Docker
+    condition: always()
+    continueOnError: true
