@@ -1,7 +1,13 @@
+# TODO's:
+# Use phase templates for Windows legs - steps are identical outside of os variable (2016 vs 1709) and queue matrix (phased templates not supported)
+# Create init-docker phase which calls docker-cleanup (nested templates not supported)
+# Find a single place (e.g. shared variable) that defines common variables across build phases - imageBuilder.imageName
+
 trigger:
   branches:
     include:
       - nightly
+  paths:
     exclude:
       - samples/*
 
@@ -22,12 +28,12 @@ phases:
   variables:
     imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-debian-20180330181728
   steps:
-  - template: steps/init-docker-linux.yml
-    parameters:
-      solution: $(imageBuilder.imageName)
+  - template: steps/docker-cleanup-linux.yml
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
   - script: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(Build.SourcesDirectory):/repo -w /repo --name image_builder_$(Build.BuildId) $(imageBuilder.imageName) build --path $(dotnet.version) --var VersionFilter=$(dotnet.version) --var ArchitectureFilter=amd64 --push --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
     displayName: Build Images
-  # - template: steps/docker-cleanup-linux.yml
+  - template: steps/docker-cleanup-linux.yml
 
 - phase: Linux_arm32v7
   queue:
@@ -50,9 +56,9 @@ phases:
     docker.setupContainerName: setup_$(docker.baseArtifactName)
     imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-debian-20180330181728
   steps:
-  - template: steps/init-docker-windows.yml
-    parameters:
-      solution: $(imageBuilder.imageName)
+  - template: steps/docker-cleanup-windows.yml
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
   - script: docker create $(docker.certVolumeArg) --name $(docker.setupContainerName) $(imageBuilder.imageName)
     displayName: Create Setup Container
   - script: docker cp c:/docker-certs $(docker.setupContainerName):/
@@ -70,7 +76,7 @@ phases:
     displayName: Cleanup ARM Docker
     condition: always()
     continueOnError: true
-  # - template: steps/docker-cleanup-windows.yml
+  - template: steps/docker-cleanup-windows.yml
 
 - phase: WindowsServer2016_amd64
   queue:
@@ -90,9 +96,9 @@ phases:
     docker.setupContainerName: setup_$(docker.baseArtifactName)
     imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-nanoserver-20180227141513
   steps:
-  - template: steps/init-docker-windows.yml
-    parameters:
-      solution: $(imageBuilder.imageName)
+  - template: steps/docker-cleanup-windows.yml
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
   - script: docker create --name $(docker.setupContainerName) $(imageBuilder.imageName)
     displayName: Create Setup Container
   - script: docker cp $(docker.setupContainerName):/image-builder $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder
@@ -102,7 +108,7 @@ phases:
     continueOnError: true
   - script: $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder/Microsoft.DotNet.ImageBuilder.exe build --path $(dotnet.version)/nanoserver-sac2016/* --var ArchitectureFilter=amd64 --var VersionFilter=$(dotnet.version) --var OSFilter=nanoserver-sac2016 --push --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
     displayName: Build Images
-  # - template: steps/docker-cleanup-windows.yml
+  - template: steps/docker-cleanup-windows.yml
 
 - phase: WindowsServer1709_amd64
   queue:
@@ -120,9 +126,9 @@ phases:
     docker.setupContainerName: setup_$(docker.baseArtifactName)
     imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-nanoserver-20180227141513
   steps:
-  - template: steps/init-docker-windows.yml
-    parameters:
-      solution: $(imageBuilder.imageName)
+  - template: steps/docker-cleanup-windows.yml
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
   - script: docker create --name $(docker.setupContainerName) $(imageBuilder.imageName)
     displayName: Create Setup Container
   - script: docker cp $(docker.setupContainerName):/image-builder $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder
@@ -132,7 +138,7 @@ phases:
     continueOnError: true
   - script: $(Build.BinariesDirectory)/Microsoft.DotNet.ImageBuilder/Microsoft.DotNet.ImageBuilder.exe build --path $(dotnet.version)/nanoserver-1709/* --var ArchitectureFilter=amd64 --var VersionFilter=$(dotnet.version) --var OSFilter=nanoserver-1709 --push --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
     displayName: Build Images
-  # - template: steps/docker-cleanup-windows.yml
+  - template: steps/docker-cleanup-windows.yml
 
 - phase: PostBuild
   dependsOn:
@@ -150,11 +156,11 @@ phases:
     imageBuilder.commonCmdArgs: --username $(dockerRegistry.userName) --password $(BotAccount-dotnet-dockerhub-bot-password) $(imageBuilder.queueArgs)
     imageBuilder.imageName: microsoft/dotnet-buildtools-prereqs:image-builder-debian-20180330181728
   steps:
-  - template: steps/init-docker-linux.yml
-    parameters:
-      solution: $(imageBuilder.imageName)
+  - template: steps/docker-cleanup-linux.yml
+  - script: docker pull $(imageBuilder.imageName)
+    displayName: Pull Image Builder
   - script: docker run --name publish_$(docker.baseArtifactName) $(docker.commonRunArgs) publishManifest $(imageBuilder.commonCmdArgs)
     displayName: Publish Manifest
   - script: docker run --name readme_$(docker.baseArtifactName) $(docker.commonRunArgs) updateReadme $(imageBuilder.commonCmdArgs)
     displayName: Update Readme
-  # - template: steps/docker-cleanup-linux.yml
+  - template: steps/docker-cleanup-linux.yml

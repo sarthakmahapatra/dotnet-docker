@@ -1,7 +1,0 @@
-parameters:
-  image:
-
-steps:
-- template: steps/docker-cleanup-windows.yml
-- script: docker pull ${{ image }}
-    displayName: Pull Image Builder
